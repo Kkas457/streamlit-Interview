@@ -1,0 +1,6 @@
+streamlit
+streamlit-webrtc
+streamlit-mic-recorder
+openai
+gTTS
+av
