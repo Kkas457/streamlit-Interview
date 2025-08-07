@@ -1,0 +1,17 @@
+Install dependencies:
+
+```
+pip install streamlit gtts openai sounddevice soundfile numpy streamlit-webrtc av
+```
+
+Export OPEN API KEY:
+
+```
+export OPENAI_API_KEY='your-api-key'
+```
+
+Run the app
+
+```
+streamlit run app.py
+```
