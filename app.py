@@ -203,7 +203,7 @@ if st.session_state.question_index >= len(QUESTIONS):
         "interview_date": datetime.datetime.now().isoformat(),
         "questions": st.session_state.transcriptions
     }
-    json_filename = f"interview_results_{timestamp}.json"
+    json_filename = f"interview_results_{datetime.datetime.now()}.json"
     with open(json_filename, "w") as f:
         json.dump(results, f, indent=2)
     
