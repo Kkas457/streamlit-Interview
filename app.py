@@ -10,19 +10,19 @@ from aiortc.contrib.media import MediaRecorder
 from pathlib import Path
 from streamlit_mic_recorder import mic_recorder
 
-# Initialize OpenAI client
+# Инициализация OpenAI клиента
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Sample questions
+# Вопросы на русском
 QUESTIONS = [
-    "Tell me about yourself.",
-    "What are your strengths?",
-    "Describe a challenging project you worked on.",
-    "Why do you want this position?",
-    "Where do you see yourself in five years?"
+    "Расскажите о себе.",
+    "Каковы ваши сильные стороны?",
+    "Опишите сложный проект, над которым вы работали.",
+    "Почему вы хотите получить эту должность?",
+    "Где вы видите себя через пять лет?"
 ]
 
-# Session state initialization
+# Состояние сессии
 if "question_index" not in st.session_state:
     st.session_state.question_index = 0
 if "transcriptions" not in st.session_state:
@@ -30,7 +30,7 @@ if "transcriptions" not in st.session_state:
 if "video_path" not in st.session_state:
     st.session_state.video_path = None
 
-# Directory for recordings
+# Директория для записей
 REC_DIR = Path("recordings")
 REC_DIR.mkdir(exist_ok=True)
 
@@ -40,21 +40,21 @@ if "rec_filename" not in st.session_state:
 
 out_path = st.session_state.rec_filename
 
-# Text-to-speech
+# Текст в речь
 def text_to_speech(text, filename):
     try:
-        tts = gTTS(text=text, lang="en")
+        tts = gTTS(text=text, lang="ru")
         tts.save(filename)
         return filename
     except Exception as e:
-        st.error(f"Error generating audio: {e}")
+        st.error(f"Ошибка генерации аудио: {e}")
         return None
 
-# Whisper STT with streamlit-mic-recorder
+# Распознавание речи Whisper
 def whisper_stt(question_index):
     audio = mic_recorder(
-        start_prompt="🎙️ Speak your answer",
-        stop_prompt="⏹️ Stop",
+        start_prompt="🎙️ Говорите свой ответ",
+        stop_prompt="⏹️ Стоп",
         format="webm",
         key=f"whisper_{question_index}"
     )
@@ -65,20 +65,20 @@ def whisper_stt(question_index):
             transcription = client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_bio,
-                language="en"
+                language="ru"
             )
             return transcription.text
         except Exception as e:
-            st.error(f"Transcription failed: {e}")
-            return "Transcription failed"
+            st.error(f"Ошибка распознавания: {e}")
+            return "Ошибка распознавания"
     return None
 
-# Recorder factory for both video + audio
+# Фабрика записи видео+аудио
 def in_recorder_factory():
     return MediaRecorder(str(out_path), format="mp4")
 
-# UI
-st.title("Interview Practice App")
+# Интерфейс
+st.title("Тренажёр собеседований")
 
 ctx = webrtc_streamer(
     key="interview-recorder",
@@ -87,10 +87,10 @@ ctx = webrtc_streamer(
     in_recorder_factory=in_recorder_factory,
 )
 
-# Ask questions
+# Задаём вопросы
 if st.session_state.question_index < len(QUESTIONS):
     current_question = QUESTIONS[st.session_state.question_index]
-    st.write(f"Question {st.session_state.question_index + 1}: {current_question}")
+    st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
 
     audio_file = f"question_{st.session_state.question_index}.mp3"
     if text_to_speech(current_question, audio_file):
@@ -110,37 +110,37 @@ if st.session_state.question_index < len(QUESTIONS):
             os.remove(audio_file)
         st.rerun()
 
-# Interview completed
+# Интервью завершено
 if st.session_state.question_index >= len(QUESTIONS) and ctx and not ctx.state.playing:
     if out_path.exists() and out_path.stat().st_size > 100_000:
-        st.subheader("Interview completed!")
+        st.subheader("Интервью завершено!")
         for item in st.session_state.transcriptions:
-            st.write(f"**Question:** {item['question']}")
-            st.write(f"**Your Answer:** {item['transcription']}")
-            st.write(f"**Timestamp:** {item['timestamp']}")
+            st.write(f"**Вопрос:** {item['question']}")
+            st.write(f"**Ваш ответ:** {item['transcription']}")
+            st.write(f"**Время:** {item['timestamp']}")
             st.write("---")
 
-        st.subheader("Video Recording with Audio")
+        st.subheader("Видеозапись с аудио")
         st.video(str(out_path))
         st.download_button(
-            "Download Video",
+            "Скачать видео (MP4)",
             data=out_path.read_bytes(),
             file_name=out_path.name,
             mime="video/mp4",
         )
 
         results = {
-            "interview_date": datetime.datetime.now().isoformat(),
-            "questions": st.session_state.transcriptions
+            "дата_интервью": datetime.datetime.now().isoformat(),
+            "вопросы": st.session_state.transcriptions
         }
-        json_filename = f"interview_results_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        json_filename = f"результаты_интервью_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(json_filename, "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump(results, f, indent=2, ensure_ascii=False)
 
         with open(json_filename, "rb") as f:
-            st.download_button("Download Results (JSON)", f, json_filename, "application/json")
+            st.download_button("Скачать результаты (JSON)", f, json_filename, "application/json")
 
-        if st.button("Start New Interview"):
+        if st.button("Начать новое интервью"):
             st.session_state.question_index = 0
             st.session_state.transcriptions = []
             st.session_state.video_path = None
