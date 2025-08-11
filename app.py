@@ -2,50 +2,44 @@ import streamlit as st
 import json
 import os
 import datetime
-import io
+import time
+import uuid
+import subprocess
+from pathlib import Path
 from gtts import gTTS
 from openai import OpenAI
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from aiortc.contrib.media import MediaRecorder
-from pathlib import Path
-from streamlit_mic_recorder import mic_recorder
-import time
 
-# Инициализация OpenAI клиента
+# ========== CONFIG ==========
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# Вопросы на русском
 QUESTIONS = [
-    "Как  ты оцениваешь свой уровень стресса от 1 до 10 ",
-    "Как ты обычно снимаешь стресс алкоголь сигареты физическая активность еда компьютерные игры общение с друзьями",
-    # "Как ты относишься к экстремальным видам спорта?",
-    # "Какой у тебя сейчас уровень внутренней энергии одного до 10?",
-    # "Что делать тебя счастливым здорово образ жизни встречи с друзьями природа родные путешествия"
+    "Как ты оцениваешь свой уровень стресса от 1 до 10?",
+    "Как ты обычно снимаешь стресс: алкоголь, сигареты, физическая активность, еда, компьютерные игры, общение с друзьями?",
 ]
 
-# --- Состояния сессии ---
-if "start_interview" not in st.session_state:
-    st.session_state.start_interview = False
-if "recording_started" not in st.session_state:
-    st.session_state.recording_started = False
-if "question_index" not in st.session_state:
-    st.session_state.question_index = 0
-if "transcriptions" not in st.session_state:
-    st.session_state.transcriptions = []
-if "video_ready" not in st.session_state:
-    st.session_state.video_ready = False
-
-# Директория для записей
 REC_DIR = Path("recordings")
 REC_DIR.mkdir(exist_ok=True)
 
-if "rec_filename" not in st.session_state:
-    prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    st.session_state.rec_filename = REC_DIR / f"{prefix}.mp4"
+# ========== SESSION STATE INITIALIZATION ==========
+defaults = {
+    "start_interview": False,
+    "questions_started": False,
+    "question_index": 0,
+    "question_audio_played": False,
+    "answer_start_time": None,
+    "timestamps": [],
+    "recording_started_at": None,
+    "video_ready": False,
+    "video_filename": REC_DIR / f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
+    "transcriptions": [],
+    "recorder_stopped": False,
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
-out_path = st.session_state.rec_filename
-
-# --- Текст в речь ---
+# ========== HELPERS ==========
 def text_to_speech(text, filename):
     try:
         tts = gTTS(text=text, lang="ru")
@@ -55,136 +49,194 @@ def text_to_speech(text, filename):
         st.error(f"Ошибка генерации аудио: {e}")
         return None
 
-# --- Распознавание речи Whisper ---
-def whisper_stt(question_index):
-    audio = mic_recorder(
-        start_prompt="🎙️ Говорите свой ответ",
-        stop_prompt="⏹️ Стоп",
-        format="webm",
-        key=f"whisper_{question_index}"
-    )
-    if audio:
-        audio_bio = io.BytesIO(audio["bytes"])
-        audio_bio.name = "audio.webm"
-        try:
+def whisper_stt(audio_path: Path):
+    try:
+        with open(audio_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
                 model="whisper-1",
-                file=audio_bio,
+                file=audio_file,
                 language="ru"
             )
-            return transcription.text
-        except Exception as e:
-            st.error(f"Ошибка распознавания: {e}")
-            return "Ошибка распознавания"
-    return None
+        return transcription.text
+    except Exception as e:
+        return f"Ошибка распознавания: {str(e)}"
 
-# --- Фабрика записи видео+аудио ---
-def in_recorder_factory():
-    return MediaRecorder(str(out_path), format="mp4")
+def ffmpeg_available():
+    try:
+        subprocess.run(["ffmpeg", "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except Exception:
+        return False
 
-# --- Заголовок ---
+def cut_audio_segment(video_path: Path, start: float, end: float, output_path: Path):
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-ss", f"{start}",
+            "-to", f"{end}",
+            "-vn",
+            "-acodec", "libmp3lame",
+            str(output_path)
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return True
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode() if e.stderr else str(e)
+        st.error(f"FFmpeg error while cutting audio: {stderr}")
+        return False
+
+# ========== UI ==========
 st.title("Анализ вашего психологического состояния")
 
-# --- Этап 1: Начало интервью ---
 if not st.session_state.start_interview:
     st.info(
-    "📹 Анализ вашего психологического состояния.\n\n"
-    "1️⃣ Нажмите **«🎬 Начать интервью»**, чтобы запустить камеру и микрофон.\n\n"
-    "2️⃣ Убедитесь, что видео и звук работают, нажмите **«START»**\n\n"
-    "3️⃣ Когда будете готовы — нажмите **«▶ Начать вопросы»**, и каждый вопрос будет задаваться вслух.\n\n"
-    "4️⃣ После каждого вопроса говорите свой ответ в микрофон.\n\n"
-    "5️⃣ По завершении вы сможете скачать видео и текстовую расшифровку."
-)
-
+        "📹 Инструкция:\n\n"
+        "1. Нажмите **Начать интервью** — это запустит камеру и микрофон и начнёт запись.\n"
+        "2. Нажмите **▶ Начать вопросы** — вопросы будут зачитываться вслух.\n"
+        "3. После вопроса отвечайте; когда закончите — нажмите **Далее**.\n"
+        "4. По окончании получите видео и расшифровку.\n\n"
+        "**Важно:** Убедитесь, что ваш браузер разрешил доступ к микрофону и камере."
+    )
     if st.button("🎬 Начать интервью"):
         st.session_state.start_interview = True
         st.rerun()
 else:
-    # --- Этап 2: Запуск WebRTC записи ---
-    ctx = webrtc_streamer(
-        key="interview-recorder",
+    video_filename_path = str(st.session_state.video_filename)
+
+    video_ctx = webrtc_streamer(
+        key="interview-video",
         mode=WebRtcMode.SENDRECV,
         media_stream_constraints={"video": True, "audio": True},
-        in_recorder_factory=in_recorder_factory,
+        in_recorder_factory=lambda: MediaRecorder(video_filename_path, format="mp4"),
     )
 
-    # --- Этап 3: Ожидание подтверждения начала вопросов ---
-    if ctx.state.playing and not st.session_state.recording_started:
-        st.success("Запись видео началась! Когда будете готовы — нажмите кнопку для начала вопросов.")
+    # Фикс: запоминаем старт записи
+    if video_ctx.state.playing and st.session_state.recording_started_at is None:
+        st.session_state.recording_started_at = time.time()
+        st.success("Запись видео началась.")
+
+    # Кнопка запуска вопросов
+    if video_ctx.state.playing and not st.session_state.questions_started:
         if st.button("▶ Начать вопросы"):
-            st.session_state.recording_started = True
+            st.session_state.questions_started = True
+            st.session_state.question_audio_played = False
             st.rerun()
 
-    # --- Этап 4: Процесс интервью ---
-    if st.session_state.recording_started and not st.session_state.video_ready:
+    # Основной цикл вопросов
+    if st.session_state.questions_started and not st.session_state.video_ready:
         if st.session_state.question_index < len(QUESTIONS):
-            current_question = QUESTIONS[st.session_state.question_index]
-            st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
+            q_idx = st.session_state.question_index
+            current_question = QUESTIONS[q_idx]
+            st.write(f"Вопрос {q_idx + 1}: {current_question}")
 
-            audio_file = f"question_{st.session_state.question_index}.mp3"
-            if text_to_speech(current_question, audio_file):
-                with open(audio_file, "rb") as f:
-                    st.audio(f.read(), format="audio/mp3", autoplay=True)
+            if not st.session_state.question_audio_played:
+                tts_file = REC_DIR / f"q_{q_idx}_{uuid.uuid4().hex}.mp3"
+                if text_to_speech(current_question, str(tts_file)):
+                    with open(tts_file, "rb") as f:
+                        st.audio(f.read(), format="audio/mp3", autoplay=True)
+                    tts_file.unlink(missing_ok=True)
+                st.session_state.answer_start_time = time.time()
+                st.session_state.question_audio_played = True
 
-            transcription = whisper_stt(st.session_state.question_index)
-            if transcription:
-                st.session_state.transcriptions.append({
-                    "question": current_question,
-                    "transcription": transcription,
-                    "timestamp": datetime.datetime.now().isoformat()
+            st.info("Говорите ответ. Нажмите «Далее», когда закончите.")
+
+            if st.button("Далее"):
+                abs_start = st.session_state.answer_start_time or time.time()
+                abs_end = time.time()
+                rel_start = max(0.0, abs_start - st.session_state.recording_started_at)
+                rel_end = max(rel_start + 0.1, abs_end - st.session_state.recording_started_at)
+
+                st.session_state.timestamps.append({
+                    "index": q_idx,
+                    "start": rel_start,
+                    "end": rel_end
                 })
 
                 st.session_state.question_index += 1
-                if os.path.exists(audio_file):
-                    os.remove(audio_file)
+                st.session_state.question_audio_played = False
+                st.session_state.answer_start_time = None
 
-                # Если это был последний вопрос → завершаем интервью
                 if st.session_state.question_index >= len(QUESTIONS):
-                    st.session_state.recording_started = False
-                    # Ждём, пока файл записи станет достаточно большим (запись завершится)
-                    for _ in range(15):
-                        if out_path.exists() and out_path.stat().st_size > 100_000:
-                            st.session_state.video_ready = True
-                            break
-                        time.sleep(0.3)
-                    st.rerun()
-                else:
-                    st.rerun()
+                    st.session_state.video_ready = True
 
-    # --- Этап 5: Завершение интервью ---
-    if st.session_state.video_ready:
-        st.subheader("Интервью завершено!")
-        for item in st.session_state.transcriptions:
-            st.write(f"**Вопрос:** {item['question']}")
-            st.write(f"**Ваш ответ:** {item['transcription']}")
-            st.write(f"**Время:** {item['timestamp']}")
-            st.write("---")
-
-        st.subheader("Видеозапись с аудио")
-        st.video(str(out_path))
-        st.download_button(
-            "Скачать видео (MP4)",
-            data=out_path.read_bytes(),
-            file_name=out_path.name,
-            mime="video/mp4",
-        )
-
-        results = {
-            "дата_интервью": datetime.datetime.now().isoformat(),
-            "вопросы": st.session_state.transcriptions
-        }
-        json_filename = f"результаты_интервью_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(json_filename, "w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2, ensure_ascii=False)
-
-        with open(json_filename, "rb") as f:
-            st.download_button("Скачать результаты (JSON)", f, json_filename, "application/json")
-
-        if st.button("🔄 Начать новое интервью"):
-            st.session_state.start_interview = False
-            st.session_state.recording_started = False
-            st.session_state.question_index = 0
-            st.session_state.transcriptions = []
-            st.session_state.video_ready = False
-            st.session_state.rec_filename = REC_DIR / f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+                st.rerun()
+        else:
+            st.session_state.video_ready = True
             st.rerun()
+
+    # Обработка после завершения
+    if st.session_state.video_ready:
+        st.success("Интервью завершено. Останавливаем запись...")
+
+        # Фикс: явно останавливаем MediaRecorder
+        if not st.session_state.recorder_stopped:
+            if hasattr(video_ctx, "in_recorder") and video_ctx.in_recorder:
+                try:
+                    video_ctx.in_recorder.stop()
+                    time.sleep(2)  # даём время записаться заголовкам MP4
+                    st.session_state.recorder_stopped = True
+                except Exception as e:
+                    st.error(f"Ошибка остановки записи: {e}")
+
+        if not ffmpeg_available():
+            st.error("FFmpeg не найден в системе.")
+        elif not st.session_state.video_filename.exists():
+            st.error("Видеофайл не найден.")
+        else:
+            st.info("Вырезаем ответы и отправляем на распознавание...")
+
+            results = []
+            for seg in st.session_state.timestamps:
+                q_idx = seg["index"]
+                audio_out = REC_DIR / f"answer_q{q_idx}_{uuid.uuid4().hex}.mp3"
+                ok = cut_audio_segment(st.session_state.video_filename, seg["start"], seg["end"], audio_out)
+
+                transcription_text = "Ошибка при обработке"
+                if ok and audio_out.exists():
+                    transcription_text = whisper_stt(audio_out)
+                    audio_out.unlink(missing_ok=True)
+
+                results.append({
+                    "question": QUESTIONS[q_idx],
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "transcription": transcription_text
+                })
+
+            st.session_state.transcriptions = results
+
+            st.header("Результаты")
+            for r in st.session_state.transcriptions:
+                st.write(f"**Вопрос:** {r['question']}")
+                st.write(f"**Ответ:** {r['transcription']}")
+                st.write(f"**Отрезок:** {r['start']:.2f} — {r['end']:.2f}")
+                st.divider()
+
+            st.header("Видеозапись")
+            with open(st.session_state.video_filename, "rb") as f:
+                st.video(f.read())
+                f.seek(0)
+                st.download_button(
+                    "Скачать видео (MP4)",
+                    data=f.read(),
+                    file_name=st.session_state.video_filename.name,
+                    mime="video/mp4",
+                )
+
+            json_data = {
+                "date": datetime.datetime.now().isoformat(),
+                "video_file": st.session_state.video_filename.name,
+                "answers": st.session_state.transcriptions
+            }
+            st.download_button(
+                "Скачать результаты (JSON)",
+                data=json.dumps(json_data, ensure_ascii=False, indent=2),
+                file_name=st.session_state.video_filename.with_suffix(".json").name,
+                mime="application/json",
+            )
+
+            if st.button("🔄 Начать заново"):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
