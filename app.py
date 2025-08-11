@@ -9,6 +9,7 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from aiortc.contrib.media import MediaRecorder
 from pathlib import Path
 from streamlit_mic_recorder import mic_recorder
+import time
 
 # Инициализация OpenAI клиента
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -23,12 +24,14 @@ QUESTIONS = [
 ]
 
 # Состояние сессии
+if "start_interview" not in st.session_state:
+    st.session_state.start_interview = False
 if "question_index" not in st.session_state:
     st.session_state.question_index = 0
 if "transcriptions" not in st.session_state:
     st.session_state.transcriptions = []
-if "video_path" not in st.session_state:
-    st.session_state.video_path = None
+if "video_ready" not in st.session_state:
+    st.session_state.video_ready = False
 
 # Директория для записей
 REC_DIR = Path("recordings")
@@ -77,42 +80,62 @@ def whisper_stt(question_index):
 def in_recorder_factory():
     return MediaRecorder(str(out_path), format="mp4")
 
-# Интерфейс
+# Заголовок
 st.title("Тренажёр собеседований")
 
-ctx = webrtc_streamer(
-    key="interview-recorder",
-    mode=WebRtcMode.SENDRECV,
-    media_stream_constraints={"video": True, "audio": True},
-    in_recorder_factory=in_recorder_factory,
-)
-
-# Задаём вопросы
-if st.session_state.question_index < len(QUESTIONS):
-    current_question = QUESTIONS[st.session_state.question_index]
-    st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
-
-    audio_file = f"question_{st.session_state.question_index}.mp3"
-    if text_to_speech(current_question, audio_file):
-        with open(audio_file, "rb") as f:
-            st.audio(f.read(), format="audio/mp3", autoplay=True)
-
-    transcription = whisper_stt(st.session_state.question_index)
-    if transcription:
-        st.session_state.transcriptions.append({
-            "question": current_question,
-            "transcription": transcription,
-            "timestamp": datetime.datetime.now().isoformat()
-        })
-
-        st.session_state.question_index += 1
-        if os.path.exists(audio_file):
-            os.remove(audio_file)
+# Если интервью ещё не началось
+if not st.session_state.start_interview:
+    st.info("Нажмите кнопку ниже, чтобы начать запись видео и интервью.")
+    if st.button("🎬 Начать интервью"):
+        st.session_state.start_interview = True
         st.rerun()
+else:
+    # Запуск WebRTC записи
+    ctx = webrtc_streamer(
+        key="interview-recorder",
+        mode=WebRtcMode.SENDRECV,
+        media_stream_constraints={"video": True, "audio": True},
+        in_recorder_factory=in_recorder_factory,
+    )
 
-# Интервью завершено
-if st.session_state.question_index >= len(QUESTIONS) and ctx and not ctx.state.playing:
-    if out_path.exists() and out_path.stat().st_size > 100_000:
+    # Процесс интервью
+    if st.session_state.question_index < len(QUESTIONS):
+        current_question = QUESTIONS[st.session_state.question_index]
+        st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
+
+        audio_file = f"question_{st.session_state.question_index}.mp3"
+        if text_to_speech(current_question, audio_file):
+            with open(audio_file, "rb") as f:
+                st.audio(f.read(), format="audio/mp3", autoplay=True)
+
+        transcription = whisper_stt(st.session_state.question_index)
+        if transcription:
+            st.session_state.transcriptions.append({
+                "question": current_question,
+                "transcription": transcription,
+                "timestamp": datetime.datetime.now().isoformat()
+            })
+
+            st.session_state.question_index += 1
+            if os.path.exists(audio_file):
+                os.remove(audio_file)
+
+            # Если это был последний вопрос → останавливаем запись
+            if st.session_state.question_index >= len(QUESTIONS):
+                if ctx and ctx.state.playing:
+                    ctx.stop()
+                # ждём финализации файла
+                for _ in range(15):
+                    if out_path.exists() and out_path.stat().st_size > 100_000:
+                        st.session_state.video_ready = True
+                        break
+                    time.sleep(0.3)
+                st.rerun()
+            else:
+                st.rerun()
+
+    # После завершения
+    if st.session_state.video_ready:
         st.subheader("Интервью завершено!")
         for item in st.session_state.transcriptions:
             st.write(f"**Вопрос:** {item['question']}")
@@ -134,15 +157,16 @@ if st.session_state.question_index >= len(QUESTIONS) and ctx and not ctx.state.p
             "вопросы": st.session_state.transcriptions
         }
         json_filename = f"результаты_интервью_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        with open(json_filename, "w") as f:
+        with open(json_filename, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
 
         with open(json_filename, "rb") as f:
             st.download_button("Скачать результаты (JSON)", f, json_filename, "application/json")
 
-        if st.button("Начать новое интервью"):
+        if st.button("🔄 Начать новое интервью"):
+            st.session_state.start_interview = False
             st.session_state.question_index = 0
             st.session_state.transcriptions = []
-            st.session_state.video_path = None
+            st.session_state.video_ready = False
             st.session_state.rec_filename = REC_DIR / f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
             st.rerun()
