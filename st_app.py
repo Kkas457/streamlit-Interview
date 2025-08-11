@@ -34,7 +34,6 @@ defaults = {
     "video_filename": REC_DIR / f"{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
     "transcriptions": [],
     "recorder_stopped": False,
-    "processing_started": False,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -96,8 +95,7 @@ if not st.session_state.start_interview:
         "1. Нажмите **Начать интервью** — это запустит камеру и микрофон и начнёт запись.\n"
         "2. Нажмите **▶ Начать вопросы** — вопросы будут зачитываться вслух.\n"
         "3. После вопроса отвечайте; когда закончите — нажмите **Далее**.\n"
-        "4. По окончании, нажмите на красную кнопку «**STOP**» под видео, затем **Получить результаты**.\n"
-        "5. Вы получите видео и расшифровку.\n\n"
+        "4. По окончании получите видео и расшифровку.\n\n"
         "**Важно:** Убедитесь, что ваш браузер разрешил доступ к микрофону и камере."
     )
     if st.button("🎬 Начать интервью"):
@@ -106,28 +104,26 @@ if not st.session_state.start_interview:
 else:
     video_filename_path = str(st.session_state.video_filename)
 
-    # Use 'sendonly' for video and 'sendrecv' for audio to prevent issues
     video_ctx = webrtc_streamer(
-    key="interview-video",
-    mode=WebRtcMode.SENDRECV,
-    media_stream_constraints={
-        "video": {"width": 640, "height": 480, "frameRate": 15},
-        "audio": True
-    },
-    in_recorder_factory=lambda: MediaRecorder(video_filename_path, format="mp4"),
+        key="interview-video",
+        mode=WebRtcMode.SENDRECV,
+        media_stream_constraints={"video": True, "audio": True},
+        in_recorder_factory=lambda: MediaRecorder(video_filename_path, format="mp4"),
     )
 
+    # Фикс: запоминаем старт записи
     if video_ctx.state.playing and st.session_state.recording_started_at is None:
         st.session_state.recording_started_at = time.time()
         st.success("Запись видео началась.")
 
-    # Show "Start Questions" button only when video is playing
-    if video_ctx.state.playing and not st.session_state.questions_started and not st.session_state.video_ready:
+    # Кнопка запуска вопросов
+    if video_ctx.state.playing and not st.session_state.questions_started:
         if st.button("▶ Начать вопросы"):
             st.session_state.questions_started = True
             st.session_state.question_audio_played = False
             st.rerun()
 
+    # Основной цикл вопросов
     if st.session_state.questions_started and not st.session_state.video_ready:
         if st.session_state.question_index < len(QUESTIONS):
             q_idx = st.session_state.question_index
@@ -169,27 +165,27 @@ else:
             st.session_state.video_ready = True
             st.rerun()
 
-    # Processing after all questions are done and video is ready to be stopped
-    if st.session_state.video_ready and not st.session_state.processing_started:
-        st.success("Интервью завершено. Пожалуйста, нажмите на красную кнопку **STOP** под видео, чтобы остановить запись и получить результаты.")
-        
-        if st.button("Получить результаты"):
-            # Check if the user has manually stopped the recording
-            if not video_ctx.state.playing:
-                st.session_state.processing_started = True
-                st.rerun()
-            else:
-                st.warning("Пожалуйста, сначала нажмите на красную кнопку **STOP** под видео.")
+    # Обработка после завершения
+    if st.session_state.video_ready:
+        st.success("Интервью завершено. Останавливаем запись...")
 
-    # This block is for processing the results once the user has stopped the recording
-    if st.session_state.processing_started:
-        st.info("Обрабатываем видео и расшифровываем ответы...")
+        # Фикс: явно останавливаем MediaRecorder
+        if not st.session_state.recorder_stopped:
+            if hasattr(video_ctx, "in_recorder") and video_ctx.in_recorder:
+                try:
+                    video_ctx.in_recorder.stop()
+                    time.sleep(5)  # даём время записаться заголовкам MP4
+                    st.session_state.recorder_stopped = True
+                except Exception as e:
+                    st.error(f"Ошибка остановки записи: {e}")
 
         if not ffmpeg_available():
-            st.error("FFmpeg не найден в системе. Установите его для продолжения.")
+            st.error("FFmpeg не найден в системе.")
         elif not st.session_state.video_filename.exists():
             st.error("Видеофайл не найден.")
         else:
+            st.info("Вырезаем ответы и отправляем на распознавание...")
+
             results = []
             for seg in st.session_state.timestamps:
                 q_idx = seg["index"]
@@ -214,23 +210,19 @@ else:
             for r in st.session_state.transcriptions:
                 st.write(f"**Вопрос:** {r['question']}")
                 st.write(f"**Ответ:** {r['transcription']}")
-                st.write(f"**Отрезок:** {r['start']:.2f} — {r['end']:.2f} сек.")
+                st.write(f"**Отрезок:** {r['start']:.2f} — {r['end']:.2f}")
                 st.divider()
 
             st.header("Видеозапись")
-            try:
-                with open(st.session_state.video_filename, "rb") as f:
-                    st.video(f.read())
-                    f.seek(0)
-                    st.download_button(
-                        "Скачать видео (MP4)",
-                        data=f.read(),
-                        file_name=st.session_state.video_filename.name,
-                        mime="video/mp4",
-                    )
-            except FileNotFoundError:
-                st.error("Видеофайл не найден. Возможно, произошла ошибка записи.")
-
+            with open(st.session_state.video_filename, "rb") as f:
+                st.video(f.read())
+                f.seek(0)
+                st.download_button(
+                    "Скачать видео (MP4)",
+                    data=f.read(),
+                    file_name=st.session_state.video_filename.name,
+                    mime="video/mp4",
+                )
 
             json_data = {
                 "date": datetime.datetime.now().isoformat(),
@@ -243,7 +235,7 @@ else:
                 file_name=st.session_state.video_filename.with_suffix(".json").name,
                 mime="application/json",
             )
-            
+
             if st.button("🔄 Начать заново"):
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
