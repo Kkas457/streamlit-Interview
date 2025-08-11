@@ -17,15 +17,17 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Вопросы на русском
 QUESTIONS = [
     "Расскажите о себе.",
-    "Каковы ваши сильные стороны?",
-    "Опишите сложный проект, над которым вы работали.",
-    "Почему вы хотите получить эту должность?",
-    "Где вы видите себя через пять лет?"
+    # "Каковы ваши сильные стороны?",
+    # "Опишите сложный проект, над которым вы работали.",
+    # "Почему вы хотите получить эту должность?",
+    # "Где вы видите себя через пять лет?"
 ]
 
-# Состояние сессии
+# --- Состояния сессии ---
 if "start_interview" not in st.session_state:
     st.session_state.start_interview = False
+if "recording_started" not in st.session_state:
+    st.session_state.recording_started = False
 if "question_index" not in st.session_state:
     st.session_state.question_index = 0
 if "transcriptions" not in st.session_state:
@@ -43,7 +45,7 @@ if "rec_filename" not in st.session_state:
 
 out_path = st.session_state.rec_filename
 
-# Текст в речь
+# --- Текст в речь ---
 def text_to_speech(text, filename):
     try:
         tts = gTTS(text=text, lang="ru")
@@ -53,7 +55,7 @@ def text_to_speech(text, filename):
         st.error(f"Ошибка генерации аудио: {e}")
         return None
 
-# Распознавание речи Whisper
+# --- Распознавание речи Whisper ---
 def whisper_stt(question_index):
     audio = mic_recorder(
         start_prompt="🎙️ Говорите свой ответ",
@@ -76,77 +78,80 @@ def whisper_stt(question_index):
             return "Ошибка распознавания"
     return None
 
-# Фабрика записи видео+аудио
+# --- Фабрика записи видео+аудио ---
 def in_recorder_factory():
     return MediaRecorder(str(out_path), format="mp4")
 
-# Заголовок
+# --- Заголовок ---
 st.title("Тренажёр собеседований")
 
-# JavaScript для автоклика кнопки "START"
-st.markdown("""
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            const startButton = Array.from(document.querySelectorAll('button')).find(
-                btn => btn.textContent.trim() === 'START'
-            );
-            if (startButton) {
-                startButton.click();
-            }
-        }, 500); // Задержка 500 мс для загрузки DOM
-    });
-</script>
-""", unsafe_allow_html=True)
-
-# Если интервью ещё не началось
+# --- Этап 1: Начало интервью ---
 if not st.session_state.start_interview:
-    st.info("Нажмите кнопку ниже, чтобы начать запись видео и интервью.")
+    st.info(
+    "📹 Это тренажёр собеседований.\n\n"
+    "1️⃣ Нажмите **«🎬 Начать интервью»**, чтобы запустить камеру и микрофон.\n"
+    "2️⃣ Убедитесь, что видео и звук работают, нажмите **«START»**\n"
+    "3️⃣ Когда будете готовы — нажмите **«▶ Начать вопросы»**, и каждый вопрос будет задаваться вслух.\n"
+    "4️⃣ После каждого вопроса говорите свой ответ в микрофон.\n"
+    "5️⃣ По завершении вы сможете скачать видео и текстовую расшифровку."
+)
+
     if st.button("🎬 Начать интервью"):
         st.session_state.start_interview = True
         st.rerun()
 else:
-    # Запуск WebRTC записи только если вопросы ещё не закончились
-    if st.session_state.question_index < len(QUESTIONS):
-        ctx = webrtc_streamer(
-            key="interview-recorder",
-            mode=WebRtcMode.SENDRECV,
-            media_stream_constraints={"video": True, "audio": True},
-            in_recorder_factory=in_recorder_factory,
-        )
+    # --- Этап 2: Запуск WebRTC записи ---
+    ctx = webrtc_streamer(
+        key="interview-recorder",
+        mode=WebRtcMode.SENDRECV,
+        media_stream_constraints={"video": True, "audio": True},
+        in_recorder_factory=in_recorder_factory,
+    )
 
-        current_question = QUESTIONS[st.session_state.question_index]
-        st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
+    # --- Этап 3: Ожидание подтверждения начала вопросов ---
+    if ctx.state.playing and not st.session_state.recording_started:
+        st.success("Запись видео началась! Когда будете готовы — нажмите кнопку для начала вопросов.")
+        if st.button("▶ Начать вопросы"):
+            st.session_state.recording_started = True
+            st.rerun()
 
-        audio_file = f"question_{st.session_state.question_index}.mp3"
-        if text_to_speech(current_question, audio_file):
-            with open(audio_file, "rb") as f:
-                st.audio(f.read(), format="audio/mp3", autoplay=True)
+    # --- Этап 4: Процесс интервью ---
+    if st.session_state.recording_started and not st.session_state.video_ready:
+        if st.session_state.question_index < len(QUESTIONS):
+            current_question = QUESTIONS[st.session_state.question_index]
+            st.write(f"Вопрос {st.session_state.question_index + 1}: {current_question}")
 
-        transcription = whisper_stt(st.session_state.question_index)
-        if transcription:
-            st.session_state.transcriptions.append({
-                "question": current_question,
-                "transcription": transcription,
-                "timestamp": datetime.datetime.now().isoformat()
-            })
+            audio_file = f"question_{st.session_state.question_index}.mp3"
+            if text_to_speech(current_question, audio_file):
+                with open(audio_file, "rb") as f:
+                    st.audio(f.read(), format="audio/mp3", autoplay=True)
 
-            st.session_state.question_index += 1
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
+            transcription = whisper_stt(st.session_state.question_index)
+            if transcription:
+                st.session_state.transcriptions.append({
+                    "question": current_question,
+                    "transcription": transcription,
+                    "timestamp": datetime.datetime.now().isoformat()
+                })
 
-            if st.session_state.question_index >= len(QUESTIONS):
-                # Ждём финализации файла после завершения вопросов
-                for _ in range(15):
-                    if out_path.exists() and out_path.stat().st_size > 100_000:
-                        st.session_state.video_ready = True
-                        break
-                    time.sleep(0.3)
-                st.rerun()
-            else:
-                st.rerun()
+                st.session_state.question_index += 1
+                if os.path.exists(audio_file):
+                    os.remove(audio_file)
 
-    # После завершения
+                # Если это был последний вопрос → завершаем интервью
+                if st.session_state.question_index >= len(QUESTIONS):
+                    st.session_state.recording_started = False
+                    # Ждём, пока файл записи станет достаточно большим (запись завершится)
+                    for _ in range(15):
+                        if out_path.exists() and out_path.stat().st_size > 100_000:
+                            st.session_state.video_ready = True
+                            break
+                        time.sleep(0.3)
+                    st.rerun()
+                else:
+                    st.rerun()
+
+    # --- Этап 5: Завершение интервью ---
     if st.session_state.video_ready:
         st.subheader("Интервью завершено!")
         for item in st.session_state.transcriptions:
@@ -177,6 +182,7 @@ else:
 
         if st.button("🔄 Начать новое интервью"):
             st.session_state.start_interview = False
+            st.session_state.recording_started = False
             st.session_state.question_index = 0
             st.session_state.transcriptions = []
             st.session_state.video_ready = False
