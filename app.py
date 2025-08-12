@@ -114,7 +114,8 @@ else:
         "video": {"width": 640, "height": 480, "frameRate": 15},
         "audio": True
     },
-    in_recorder_factory=lambda: MediaRecorder(video_filename_path, format="mp4"),
+    # ✅ FIXED: Record the outgoing (looped-back) stream which has audio.
+    out_recorder_factory=lambda: MediaRecorder(video_filename_path, format="mp4"),
     )
 
     if video_ctx.state.playing and st.session_state.recording_started_at is None:
@@ -237,6 +238,15 @@ else:
                 "video_file": st.session_state.video_filename.name,
                 "answers": st.session_state.transcriptions
             }
+            json_filename = st.session_state.video_filename.with_suffix(".json")
+            
+            # Write the dictionary to the file in JSON format
+            with open(json_filename, "w", encoding="utf-8") as f:
+                json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+            # Show a success message
+            st.success(f"Транскрипт сохранён в файл: {json_filename.name}")
+
             st.download_button(
                 "Скачать результаты (JSON)",
                 data=json.dumps(json_data, ensure_ascii=False, indent=2),
