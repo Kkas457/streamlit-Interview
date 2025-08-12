@@ -88,7 +88,7 @@ def cut_audio_segment(video_path: Path, start: float, end: float, output_path: P
         return False
 
 # ========== UI ==========
-st.title("Анализ вашего психологического состояния")
+st.title("interview-psychologist")
 
 if not st.session_state.start_interview:
     st.info(
