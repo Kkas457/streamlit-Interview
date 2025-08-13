@@ -13,7 +13,9 @@ from aiortc.contrib.media import MediaRecorder
 
 # ========== CONFIG ==========
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-QUESTIONS = ['Ваш ФИО', 
+QUESTIONS = [
+             'Добрый день, как себя чувствуешь?',
+             'Ваш ФИО', 
              'дата рождения', 
              'место рождения и местожительства',
              'есть ли у тебя спортивные достижения? Какие?',
