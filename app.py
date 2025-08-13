@@ -13,7 +13,9 @@ from aiortc.contrib.media import MediaRecorder
 
 # ========== CONFIG ==========
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-QUESTIONS = ['Ваш ФИО', 'дата рождения', 'место рождения и местожительства',
+QUESTIONS = ['Ваш ФИО', 
+             'дата рождения', 
+             'место рождения и местожительства',
              'есть ли у тебя спортивные достижения? Какие?',
              'Вы воспитывались в полной/неполной семье',
              'Есть ли умершие среди близких родственников ? (кто, год смерти, причина)',
@@ -38,7 +40,8 @@ QUESTIONS = ['Ваш ФИО', 'дата рождения', 'место рожд�
              'есть ли девушка? Насколько близкие отношения по шкале от 1 до  5',
              'делаешь ли ставки в букмекерских конторах или он лайн ',
              'есть у тебя кредиты/займы (сколько, на какую сумму, кто оплачивает)',
-             'При прохождении ВВК в ДДО полностью ли Вы прошли обследование у врачей, есть ли факты относительно Вашего здоровья (диагнозы по которым ранее Вас не брали на службу), о которых Вы не сказали вашему старшему']
+             'При прохождении ВВК в ДДО полностью ли Вы прошли обследование у врачей, есть ли факты относительно Вашего здоровья (диагнозы по которым ранее Вас не брали на службу), о которых Вы не сказали вашему старшему'
+             ]
 
 REC_DIR = Path("recordings")
 REC_DIR.mkdir(exist_ok=True)
@@ -93,21 +96,25 @@ def ffmpeg_available():
 
 def cut_audio_segment(video_path: Path, start: float, end: float, output_path: Path):
     try:
+        # Use an absolute path for safety
+        output_path_wav = output_path.with_suffix(".wav")
         cmd = [
             "ffmpeg", "-y",
             "-i", str(video_path),
             "-ss", f"{start}",
             "-to", f"{end}",
             "-vn",
-            "-acodec", "libmp3lame",
-            str(output_path)
+            "-acodec", "pcm_s16le", # PCM signed 16-bit little-endian is a standard WAV codec
+            "-ar", "16000",          # Set sample rate to 16 kHz, which is standard for speech recognition
+            "-ac", "1",              # Set to mono audio
+            str(output_path_wav)
         ]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return True
+        return output_path_wav
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode() if e.stderr else str(e)
         st.error(f"FFmpeg error while cutting audio: {stderr}")
-        return False
+        return None
 
 # ========== UI ==========
 st.title("interview-psychologist")
@@ -214,15 +221,18 @@ else:
             st.error("Видеофайл не найден.")
         else:
             results = []
-            for seg in st.session_state.timestamps:
+            progress_bar = st.progress(0)
+            for i, seg in enumerate(st.session_state.timestamps):
                 q_idx = seg["index"]
-                audio_out = REC_DIR / f"answer_q{q_idx}_{uuid.uuid4().hex}.mp3"
-                ok = cut_audio_segment(st.session_state.video_filename, seg["start"], seg["end"], audio_out)
+                audio_out_path = REC_DIR / f"answer_q{q_idx}_{uuid.uuid4().hex}.wav"
+                
+                # Call the updated function which returns the path if successful
+                ok = cut_audio_segment(st.session_state.video_filename, seg["start"], seg["end"], audio_out_path)
 
                 transcription_text = "Ошибка при обработке"
-                if ok and audio_out.exists():
-                    transcription_text = whisper_stt(audio_out)
-                    audio_out.unlink(missing_ok=True)
+                if ok and ok.exists():
+                    transcription_text = whisper_stt(ok)
+                    ok.unlink(missing_ok=True) # Clean up the temporary WAV file
 
                 results.append({
                     "question": QUESTIONS[q_idx],
@@ -230,7 +240,9 @@ else:
                     "end": seg["end"],
                     "transcription": transcription_text
                 })
-
+                
+                progress_bar.progress((i + 1) / len(st.session_state.timestamps))
+            
             st.session_state.transcriptions = results
 
             st.header("Результаты")
