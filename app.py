@@ -81,7 +81,7 @@ def whisper_stt(audio_path: Path):
     try:
         with open(audio_path, "rb") as audio_file:
             transcription = client.audio.transcriptions.create(
-                model="whisper-1",
+                model="gpt-4o-transcribe",
                 file=audio_file,
                 language="ru"
             )
