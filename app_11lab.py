@@ -11,8 +11,13 @@ from openai import OpenAI
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 from aiortc.contrib.media import MediaRecorder
 
+# Import the ElevenLabs library
+from elevenlabs.client import ElevenLabs
 # ========== CONFIG ==========
+# You will now need both OpenAI and ElevenLabs API keys
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+elevenlabs_client = ElevenLabs(api_key=os.getenv("eleven_lab_api"))
+
 QUESTIONS = [
              'Добрый день, как себя чувствуешь?',
              'Ваш ФИО', 
@@ -76,16 +81,19 @@ def text_to_speech(text, filename):
     except Exception as e:
         st.error(f"Ошибка генерации аудио: {e}")
         return None
-
-def whisper_stt(audio_path: Path):
+    
+# Updated STT function to use ElevenLabs
+def elevenlabs_stt(audio_path: Path):
     try:
         with open(audio_path, "rb") as audio_file:
-            transcription = client.audio.transcriptions.create(
-                model="whisper-1",
+            transcript = elevenlabs_client.speech_to_text.convert(
                 file=audio_file,
-                language="ru"
+                model_id="scribe_v1",
+                tag_audio_events=True,
+                diarize=True,
+                language_code='rus',  # Specify the language code for Russian
             )
-        return transcription.text
+        return transcript.text
     except Exception as e:
         return f"Ошибка распознавания: {str(e)}"
 
@@ -233,7 +241,8 @@ else:
 
                 transcription_text = "Ошибка при обработке"
                 if ok and ok.exists():
-                    transcription_text = whisper_stt(ok)
+                    # Call the new ElevenLabs STT function
+                    transcription_text = elevenlabs_stt(ok)
                     ok.unlink(missing_ok=True) # Clean up the temporary WAV file
 
                 results.append({
