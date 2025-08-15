@@ -105,12 +105,24 @@ def cut_audio_segment(video_path: Path, start: float, end: float, output_path: P
             "-i", str(video_path),
             "-ss", f"{start}",
             "-to", f"{end}",
-            "-vn",
-            "-acodec", "pcm_s16le", # PCM signed 16-bit little-endian is a standard WAV codec
-            "-ar", "16000",          # Set sample rate to 16 kHz, which is standard for speech recognition
-            "-ac", "1",              # Set to mono audio
+            "-vn",                  # No video
+            "-acodec", "pcm_s16le", # Standard WAV codec
+            "-ar", "44100",         # HIGHER sample rate for more detail
+            "-ac", "1",             # Mono audio
+            "-af", "anlmdn",        # APPLY audio filter for noise reduction
             str(output_path_wav)
         ]
+        # cmd = [
+        #     "ffmpeg", "-y",
+        #     "-i", str(video_path),
+        #     "-ss", f"{start}",
+        #     "-to", f"{end}",
+        #     "-vn",
+        #     "-acodec", "pcm_s16le", # PCM signed 16-bit little-endian is a standard WAV codec
+        #     "-ar", "16000",          # Set sample rate to 16 kHz, which is standard for speech recognition
+        #     "-ac", "1",              # Set to mono audio
+        #     str(output_path_wav)
+        # ]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return output_path_wav
     except subprocess.CalledProcessError as e:
