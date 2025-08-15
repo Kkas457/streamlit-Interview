@@ -256,10 +256,23 @@ else:
             
             st.session_state.transcriptions = results
 
-            st.header("Результаты")
-            for r in st.session_state.transcriptions:
+            st.header("Результаты (можно редактировать)")
+            for i, r in enumerate(st.session_state.transcriptions):
                 st.write(f"**Вопрос:** {r['question']}")
-                st.write(f"**Ответ:** {r['transcription']}")
+                
+                # Create a unique key for each text_area widget
+                unique_key = f"transcription_edit_{i}"
+                
+                # Display the transcription in an editable text area
+                edited_text = st.text_area(
+                    label="Ответ:",
+                    value=r['transcription'],
+                    key=unique_key
+                )
+                
+                # IMPORTANT: Update the session state with the edited text
+                st.session_state.transcriptions[i]['transcription'] = edited_text
+                
                 st.write(f"**Отрезок:** {r['start']:.2f} — {r['end']:.2f} сек.")
                 st.divider()
 
@@ -290,7 +303,7 @@ else:
                 json.dump(json_data, f, ensure_ascii=False, indent=2)
 
             # Show a success message
-            st.success(f"Транскрипт сохранён в файл: {json_filename.name}")
+            # st.success(f"Транскрипт сохранён в файл: {json_filename.name}")
 
             st.download_button(
                 "Скачать результаты (JSON)",
