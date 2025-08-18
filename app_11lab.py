@@ -89,7 +89,7 @@ def elevenlabs_stt(audio_path: Path):
             transcript = elevenlabs_client.speech_to_text.convert(
                 file=audio_file,
                 model_id="scribe_v1",
-                tag_audio_events=True,
+                tag_audio_events=False,
                 diarize=True,
                 language_code='rus',  # Specify the language code for Russian
             )
